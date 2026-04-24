@@ -42,7 +42,6 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
     const recent = joins.filter(t => now - t < 10000);
 
-    // Phát hiện Raid (5 người vào trong 10 giây)
     if (recent.length >= 5) {
       console.log(`🚨 RAID DETECTED in ${member.guild.name}`);
       member.guild.channels.cache.forEach(channel => {
@@ -54,7 +53,6 @@ client.on(Events.GuildMemberAdd, async (member) => {
       });
     }
 
-    // Chặn tài khoản mới (dưới 3 ngày)
     const accAge = now - member.user.createdTimestamp;
     if (accAge < 1000 * 60 * 60 * 24 * 3) {
       await member.kick("Anti-raid: Account quá mới (dưới 3 ngày)").catch(() => null);
@@ -73,42 +71,50 @@ client.once(Events.ClientReady, (c) => {
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild) return;
 
-  // Lấy dữ liệu server từ DB
   let guildData = await Guild.findOne({ guildId: msg.guild.id });
   if (!guildData) {
     guildData = await Guild.create({ guildId: msg.guild.id });
   }
 
-  // --- Lệnh AI ---
+  // --- Lệnh AI (Mistral-7B Model) ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
     const prompt = msg.content.slice(3).trim();
     if (!prompt) return msg.reply("❓ Bạn muốn hỏi gì?");
 
     try {
       const res = await fetch(
-        "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
+        "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-v0.3",
         {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
             "Authorization": `Bearer ${process.env.HF_TOKEN}` 
           },
-          body: JSON.stringify({ inputs: prompt })
+          body: JSON.stringify({ 
+            inputs: `Context: You are a helpful assistant. Question: ${prompt}`,
+            parameters: { max_new_tokens: 250, return_full_text: false }
+          })
         }
       );
 
       const data = await res.json();
       
-      let reply = "🤖 AI đang bận khởi động, đợi tí rồi hỏi lại nhé!";
-      if (Array.isArray(data)) {
-        reply = data[0]?.generated_text || reply;
+      // Xử lý khi AI đang bận khởi động (Cold Start)
+      if (data.error && data.estimated_time) {
+        return msg.reply(`⏳ AI đang khởi động (đang tải model), thử lại sau khoảng ${Math.round(data.estimated_time)} giây nhé!`);
+      }
+
+      let reply = "🤖 AI hiện tại không phản hồi, hãy thử lại sau.";
+      
+      if (Array.isArray(data) && data[0]?.generated_text) {
+        reply = data[0].generated_text;
       } else if (data.generated_text) {
         reply = data.generated_text;
       } else if (data.error) {
         reply = `❌ AI Error: ${data.error}`;
       }
 
-      msg.reply(reply);
+      msg.reply(reply.trim());
     } catch (error) {
       console.error("AI Fetch Error:", error);
       msg.reply("❌ Không thể kết nối với trí tuệ nhân tạo.");
@@ -157,32 +163,9 @@ client.on(Events.MessageCreate, async (msg) => {
 // ===== START BOT =====
 client.login(process.env.TOKEN);
 
-// ===== DASHBOARD & KEEP-ALIVE =====
+// ===== DASHBOARD (Dành cho Railway/Render) =====
 const app = express();
-app.use(express.json());
-
-// Trang chủ để ping giữ cho bot không ngủ
-app.get("/", (req, res) => {
-  res.send("Bot is Online!");
-});
-
-app.get("/guild/:id", async (req, res) => {
-  const data = await Guild.findOne({ guildId: req.params.id });
-  res.json(data || { message: "Không tìm thấy dữ liệu" });
-});
-
-app.post("/guild/:id", async (req, res) => {
-  const data = await Guild.findOneAndUpdate(
-    { guildId: req.params.id },
-    req.body,
-    { upsert: true, new: true }
-  );
-  res.json(data);
-});
-
-// Render cần process.env.PORT để không bị lỗi
+app.get("/", (req, res) => res.send("Bot is Online!"));
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🌐 Dashboard: http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
 
