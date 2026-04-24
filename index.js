@@ -24,7 +24,7 @@ const client = new Client({
 const lastProcessedMessage = new Set();
 const joinMap = new Map();
 
-// --- ANTI-RAID (BẢO VỆ SERVER) ---
+// --- ANTI-RAID ---
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
     const guildData = await Guild.findOne({ guildId: member.guild.id });
@@ -44,76 +44,74 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
 client.once(Events.ClientReady, (c) => console.log(`🔥 Bot online: ${c.user.tag}`));
 
-// --- XỬ LÝ LỆNH CHÍNH ---
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild) return;
 
-  // Chống lặp tin nhắn
   if (lastProcessedMessage.has(msg.id)) return;
   lastProcessedMessage.add(msg.id);
   setTimeout(() => lastProcessedMessage.delete(msg.id), 5000);
 
   let guildData = await Guild.findOne({ guildId: msg.guild.id }) || await Guild.create({ guildId: msg.guild.id });
 
-  // --- HỆ THỐNG AI (SIÊU KIÊN NHẪN + ANTI TIMED OUT) ---
+  // --- HỆ THỐNG AI SIÊU CẤP CHỐNG TIMED OUT ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
     const prompt = msg.content.slice(3).trim();
     if (!prompt) return msg.reply("❓ Nhắn gì đi chứ bro?");
 
     const lowPrompt = prompt.toLowerCase();
+    // Phản hồi "Nah bro" tại chỗ luôn cho nhanh
     if (lowPrompt.includes("ngu")) return msg.reply("Nah bro");
     if (lowPrompt === "hi" || lowPrompt === "hello") return msg.reply("Yo! Khỏe không bro?");
 
-    // BƯỚC 1: Phản hồi ngay lập tức để Discord KHÔNG báo Timed Out
-    const waitingMsg = await msg.reply("⏳ Chờ mình tí, đang nặn não...");
+    // BƯỚC 1: Bật trạng thái "Bot đang gõ..." (Cực quan trọng để chống Timed Out)
+    await msg.channel.sendTyping();
 
-    // BƯỚC 2: Chạy hàm xử lý AI riêng biệt (Async)
-    (async () => {
+    // BƯỚC 2: Gửi tin nhắn chờ ngay lập tức
+    const waitingMsg = await msg.reply("⏳ Đang nặn não... đừng hối!");
+
+    // BƯỚC 3: Xử lý ngầm (Background Task)
+    try {
+      let response = null;
+      // Thử SimSimi
       try {
-        let result = null;
+        const res = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 8000 });
+        if (res.data.result) response = res.data.result;
+      } catch (e) {}
 
-        // Thử Server 1: SimSimi (Kiên nhẫn 12s)
+      // Dự phòng Popcat
+      if (!response) {
         try {
-          const res1 = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 12000 });
-          if (res1.data.result) result = res1.data.result;
+          const res2 = await axios.get(`https://api.popcat.xyz/chatbot?msg=${encodeURIComponent(prompt)}`, { timeout: 8000 });
+          if (res2.data.response) response = res2.data.response;
         } catch (e) {}
-
-        // Thử Server 2 nếu Server 1 tạch (Kiên nhẫn 10s)
-        if (!result) {
-          try {
-            const res2 = await axios.get(`https://api.popcat.xyz/chatbot?msg=${encodeURIComponent(prompt)}`, { timeout: 10000 });
-            if (res2.data.response) result = res2.data.response;
-          } catch (e) {}
-        }
-
-        // BƯỚC 3: Cập nhật kết quả hoặc báo uống cafe
-        if (result) {
-          await waitingMsg.edit(`🤖 ${result}`);
-        } else {
-          await waitingMsg.edit("☕ Mình hỏi cả team AI rồi mà đứa nào cũng bận uống cafe. Thử lại sau nhé!");
-        }
-      } catch (error) {
-        await waitingMsg.edit("🤖 Não bị chập mạch rồi, thử lại câu khác xem!");
       }
-    })(); // Kết thúc hàm async tự chạy
+
+      // Sửa tin nhắn chờ thành kết quả
+      if (response) {
+        await waitingMsg.edit(`🤖 ${response}`);
+      } else {
+        await waitingMsg.edit("☕ Đám server AI rủ nhau đi uống cafe hết rồi. Tí thử lại nha!");
+      }
+    } catch (err) {
+      await waitingMsg.edit("❌ Lỗi não bộ rồi bro ơi!");
+    }
   }
 
   // --- LỆNH MOD ---
   if (msg.content.startsWith("!ban") && msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
     const user = msg.mentions.members.first();
-    if (user) user.ban().then(() => msg.reply(`🔥 Đã tiễn **${user.user.tag}**.`)).catch(() => msg.reply("❌ Role bot thấp hơn."));
+    if (user) user.ban().then(() => msg.reply(`🔥 Đã tiễn **${user.user.tag}**.`)).catch(() => msg.reply("❌ Role thấp."));
   }
 
   if (msg.content.startsWith("!kick") && msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
     const user = msg.mentions.members.first();
-    if (user) user.kick().then(() => msg.reply(`✅ Đã kick **${user.user.tag}**.`)).catch(() => msg.reply("❌ Lỗi."));
+    if (user) user.kick().then(() => msg.reply(`✅ Đã đuổi **${user.user.tag}**.`)).catch(() => msg.reply("❌ Lỗi."));
   }
 });
 
 client.login(process.env.TOKEN);
 
-// --- DASHBOARD (GIỮ BOT 24/7) ---
 const app = express();
-app.get("/", (req, res) => res.send("Bot Online - Anti-TimedOut Version"));
+app.get("/", (req, res) => res.send("Bot Online - Final Anti-TimedOut"));
 app.listen(process.env.PORT || 3000);
 
