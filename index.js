@@ -4,18 +4,11 @@ const express = require("express");
 const mongoose = require("mongoose");
 const axios = require("axios");
 
-// ===== KẾT NỐI DATABASE =====
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ Mongo connected"))
-  .catch(err => console.log("❌ Mongo error:", err));
-
-const Guild = mongoose.model("Guild", { guildId: String, aiEnabled: { type: Boolean, default: true } });
+mongoose.connect(process.env.MONGO_URI).then(() => console.log("✅ Mongo connected"));
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
-
-client.once(Events.ClientReady, (c) => console.log(`🔥 Bot online: ${c.user.tag}`));
 
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild || !msg.content.startsWith("!ai")) return;
@@ -24,39 +17,33 @@ client.on(Events.MessageCreate, async (msg) => {
   if (!prompt) return msg.reply("❓ Bạn muốn hỏi gì?");
 
   try {
-    // Sử dụng model BlenderBot - Cực nhẹ và ổn định cho bản Free
     const response = await axios.post(
       "https://api-inference.huggingface.co/models/facebook/blenderbot-400M-distill",
       { inputs: prompt },
       {
-        headers: { 
-          Authorization: `Bearer ${process.env.HF_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        timeout: 15000
+        headers: { Authorization: `Bearer ${process.env.HF_TOKEN.trim()}` },
+        timeout: 20000
       }
     );
 
     const data = response.data;
 
-    // Kiểm tra nếu model đang tải
+    // Nếu model đang tải, nó sẽ trả về estimated_time
     if (data.error && data.estimated_time) {
-      return msg.reply(`⏳ AI đang khởi động, đợi khoảng ${Math.round(data.estimated_time)}s nhé!`);
+      return msg.reply(`⏳ AI đang khởi động, đợi tí (khoảng ${Math.round(data.estimated_time)}s) rồi hỏi lại nhé!`);
     }
 
-    let reply = Array.isArray(data) ? data[0]?.generated_text : data.generated_text;
-    msg.reply(reply || "🤖 AI phản hồi trống, thử lại câu khác nhé.");
+    const reply = Array.isArray(data) ? data[0]?.generated_text : data.generated_text;
+    msg.reply(reply || "🤖 AI phản hồi trống, thử lại câu khác nha.");
 
   } catch (error) {
-    console.error("AI Error:", error.message);
-    msg.reply("❌ Lỗi kết nối AI. Hãy kiểm tra lại HF_TOKEN trên Railway!");
+    console.error("Lỗi AI:", error.response?.data || error.message);
+    msg.reply("❌ Vẫn không kết nối được. Hãy đảm bảo bạn đã dán Token mới vào Railway và nhấn Save!");
   }
 });
 
 client.login(process.env.TOKEN);
-
-// DASHBOARD GIỮ BOT ONLINE
 const app = express();
-app.get("/", (req, res) => res.send("Bot is Online!"));
+app.get("/", (req, res) => res.send("Bot Online"));
 app.listen(process.env.PORT || 3000, "0.0.0.0");
 
