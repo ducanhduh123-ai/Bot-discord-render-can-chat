@@ -1,0 +1,97 @@
+require("dotenv").config();
+const { Client, GatewayIntentBits, PermissionsBitField, Events } = require("discord.js");
+const express = require("express");
+const mongoose = require("mongoose");
+const axios = require("axios");
+
+// Kết nối DB ngầm để không làm chậm lệnh
+mongoose.connect(process.env.MONGO_URI).catch(() => null);
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
+});
+
+client.once(Events.ClientReady, () => console.log("🔥 BOT ONLINE - NO MORE RED ERROR"));
+
+client.on(Events.MessageCreate, async (msg) => {
+  if (msg.author.bot || !msg.guild) return;
+
+  // LỆNH AI - CHIÊU CUỐI DIỆT TIMED OUT
+  if (msg.content.startsWith("!ai")) {
+    const prompt = msg.content.slice(3).trim();
+    if (!prompt) return msg.channel.send("❓ Nhắn gì đi bro?");
+
+    // 1. "Nah bro" và các câu nhanh xử lý trước
+    const lowPrompt = prompt.toLowerCase();
+    if (lowPrompt.includes("ngu")) return msg.channel.send("Nah bro");
+    if (lowPrompt === "hi" || lowPrompt === "hello") return msg.channel.send("Yo! Khỏe không bro?");
+
+    // 2. Hiện trạng thái đang gõ ngay lập tức
+    msg.channel.sendTyping().catch(() => null);
+
+    // 3. Xử lý gọi AI ngầm hoàn toàn
+    (async () => {
+      try {
+        let result = null;
+        // Thử SimSimi
+        try {
+          const res = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 8000 });
+          if (res.data.result) result = res.data.result;
+        } catch (e) {}
+
+        // Nếu Sim lag, dùng AI dự phòng siêu tốc
+        if (!result) {
+          try {
+            const res2 = await axios.get(`https://api.popcat.xyz/chatbot?msg=${encodeURIComponent(prompt)}`, { timeout: 5000 });
+            result = res2.data.response;
+          } catch (e) {}
+        }
+
+        // 4. GỬI TIN NHẮN MỚI (Không dùng reply/edit để tránh lỗi đỏ)
+        if (result) {
+          msg.channel.send(`🤖 **Trả lời cho ${msg.author.username}:** ${result}`);
+        } else {
+          msg.channel.send("☕ AI rủ nhau đi cafe hết rồi, tí thử lại nhé!");
+        }
+      } catch (err) {
+        msg.channel.send("❌ Não AI bị chập mạch rồi!");
+      }
+    })();
+    return;
+  }
+
+  // --- LỆNH KICK/BAN (ĐÃ FIX ĐỂ KHÔNG TIMED OUT) ---
+  if (msg.content.startsWith("!kick")) {
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.channel.send("❌ Thiếu quyền.");
+    const user = msg.mentions.members.first();
+    if (user) user.kick().then(() => msg.channel.send("✅ Đã tiễn khách.")).catch(() => msg.channel.send("❌ Lỗi role."));
+  }
+
+  if (msg.content.startsWith("!ban")) {
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.channel.send("❌ Thiếu quyền.");
+    const user = msg.mentions.members.first();
+    if (user) user.ban().then(() => msg.channel.send("🔥 Đã ban.")).catch(() => msg.channel.send("❌ Lỗi role."));
+  }
+});
+
+// ANTI-RAID
+const joinMap = new Map();
+client.on(Events.GuildMemberAdd, async (member) => {
+    const now = Date.now();
+    const joins = joinMap.get(member.guild.id) || [];
+    joins.push(now);
+    joinMap.set(member.guild.id, joins);
+    if (joins.filter(t => now - t < 10000).length >= 5) {
+        member.guild.channels.cache.forEach(ch => {
+            if (ch.isTextBased()) ch.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
+        });
+    }
+    if (now - member.user.createdTimestamp < 1000 * 60 * 60 * 24 * 3) await member.kick("Anti-Raid").catch(() => null);
+});
+
+client.login(process.env.TOKEN);
+
+const app = express();
+app.get("/", (req, res) => res.send("Bot Online - Clean Interaction Version"));
+app.listen(process.env.PORT || 3000);
+
