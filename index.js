@@ -24,23 +24,36 @@ const client = new Client({
 });
 
 const lastProcessedMessage = new Set();
-
-// ===== 3. ANTI-RAID =====
 const joinMap = new Map();
+
+// ===== 3. HỆ THỐNG ANTI-RAID (CHẾ ĐỘ BẢO VỆ) =====
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
     const guildData = await Guild.findOne({ guildId: member.guild.id });
     if (!guildData?.antiRaid) return;
+
     const now = Date.now();
     const joins = joinMap.get(member.guild.id) || [];
     joins.push(now);
     joinMap.set(member.guild.id, joins);
-    if (joins.filter(t => now - t < 10000).length >= 5) {
+
+    // Phát hiện Raid: 5 người vào trong 10 giây
+    const recentJoins = joins.filter(t => now - t < 10000);
+    if (recentJoins.length >= 5) {
       member.guild.channels.cache.forEach(ch => {
-        if (ch.isTextBased()) ch.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
+        if (ch.isTextBased()) {
+          ch.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
+        }
       });
+      console.log(`🛡️ Anti-Raid: Đã khóa server ${member.guild.name}`);
     }
-  } catch (err) { console.error(err); }
+
+    // Tự động kick tài khoản mới tạo dưới 3 ngày
+    const accountAge = (now - member.user.createdTimestamp) / (1000 * 60 * 60 * 24);
+    if (accountAge < 3) {
+      await member.kick("Anti-Raid: Tài khoản quá mới (dưới 3 ngày)").catch(() => null);
+    }
+  } catch (err) { console.error("Lỗi Anti-Raid:", err); }
 });
 
 client.once(Events.ClientReady, (c) => console.log(`🔥 Bot online: ${c.user.tag}`));
@@ -55,42 +68,47 @@ client.on(Events.MessageCreate, async (msg) => {
 
   let guildData = await Guild.findOne({ guildId: msg.guild.id }) || await Guild.create({ guildId: msg.guild.id });
 
-  // --- HỆ THỐNG AI "NAH BRO" ---
+  // --- LỆNH AI ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
     const prompt = msg.content.slice(3).trim().toLowerCase();
     if (!prompt) return msg.reply("❓ Muốn gì nè?");
 
-    // Phản hồi đặc biệt
+    // Phản hồi tại chỗ
     if (prompt.includes("ngu")) return msg.reply("Nah bro");
     if (prompt === "hi" || prompt === "hello") return msg.reply("Yo! Khỏe không bro?");
 
     try {
-      // Thử gọi API (Nếu lag thì đi uống cafe)
-      const res = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 3000 });
+      // API chính (Timeout 10s)
+      const res = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 10000 });
       if (res.data.result) return msg.reply(res.data.result);
-      throw new Error("Cafe time");
+      throw new Error("Slow");
     } catch (error) {
-      const cafeReplies = [
-          "☕ AI đang đi uống cafe rồi, bạn chờ tí được không?",
-          "🤖 Đang nhâm nhi tách bạc xỉu, tí quay lại trả lời sau nha!",
-          "☕ Server AI chính quá tải, mình đi làm ly cafe đây."
-      ];
-      msg.reply(cafeReplies[Math.floor(Math.random() * cafeReplies.length)]);
+      try {
+        // API dự phòng
+        const res2 = await axios.get(`https://api.popcat.xyz/chatbot?msg=${encodeURIComponent(prompt)}`, { timeout: 5000 });
+        if (res2.data.response) return msg.reply(res2.data.response);
+      } catch (e) {
+        msg.reply("☕ AI đang đi uống cafe rồi, bạn chờ tí được không?");
+      }
     }
   }
 
-  // --- LỆNH BAN ---
-  if (msg.content.startsWith("!ban")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Quyền đâu mà ban?");
+  // --- LỆNH QUẢN TRỊ ---
+  if (msg.content.startsWith("!ban") && msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
     const user = msg.mentions.members.first();
-    if (user) user.ban().then(() => msg.reply(`🔥 Đã tiễn **${user.user.tag}** đi hái chè.`)).catch(() => msg.reply("❌ Bot bị 'đè' role rồi, không ban được."));
+    if (user) user.ban().then(() => msg.reply(`🔥 Đã ban: **${user.user.tag}**`)).catch(() => msg.reply("❌ Lỗi role."));
   }
 
-  // --- LỆNH KICK ---
-  if (msg.content.startsWith("!kick")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Không có quyền.");
+  if (msg.content.startsWith("!kick") && msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
     const user = msg.mentions.members.first();
-    if (user) user.kick().then(() => msg.reply(`✅ Đuổi cổ **${user.user.tag}** thành công.`)).catch(() => msg.reply("❌ Lỗi rồi."));
+    if (user) user.kick().then(() => msg.reply(`✅ Đã kick: **${user.user.tag}**`)).catch(() => msg.reply("❌ Lỗi."));
+  }
+
+  if (msg.content === "!unlock" && msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    msg.guild.channels.cache.forEach(ch => {
+        if (ch.isTextBased()) ch.permissionOverwrites.edit(msg.guild.roles.everyone, { SendMessages: true }).catch(() => null);
+    });
+    msg.reply("🔓 Server đã được mở khóa!");
   }
 });
 
@@ -98,6 +116,6 @@ client.login(process.env.TOKEN);
 
 // ===== 5. DASHBOARD =====
 const app = express();
-app.get("/", (req, res) => res.send("Bot is Active - Nah Bro Edition"));
+app.get("/", (req, res) => res.send("Bot is Active - Anti-Raid & Nah Bro Edition"));
 app.listen(process.env.PORT || 3000);
 
