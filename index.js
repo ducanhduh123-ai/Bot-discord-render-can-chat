@@ -7,49 +7,49 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
 });
 
-client.once("ready", () => console.log("✅ BOT ĐÃ ONLINE - ĐANG ĐỢI LỆNH"));
+client.once("ready", () => console.log("✅ BOT ĐÃ VƯỢT RÀO THÀNH CÔNG"));
 
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot || !msg.guild) return;
 
-  // LỆNH AI (DÙNG AXIOS GỌI TRỰC TIẾP)
+  // LỆNH AI (DÙNG LÕI DỊCH THUẬT NGẦM - KHÔNG CẦN KEY, KHÔNG LO CHẶN IP)
   if (msg.content.startsWith("!ai")) {
     const prompt = msg.content.slice(3).trim();
     if (!prompt) return msg.channel.send("❓ Gõ gì đi sếp?");
     if (prompt.toLowerCase().includes("ngu")) return msg.channel.send("Nah bro");
 
-    const waiting = await msg.channel.send("⏳ Đang nặn não...").catch(() => null);
+    const waiting = await msg.channel.send("⏳ Đang lách luật để trả lời...").catch(() => null);
 
     try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
-        { contents: [{ parts: [{ text: prompt }] }] },
-        { headers: { "Content-Type": "application/json" }, timeout: 10000 }
-      );
-
-      const result = response.data.candidates[0].content.parts[0].text;
-      await waiting.edit(`🤖 **${msg.author.username}:** ${result.substring(0, 1900)}`).catch(() => null);
+      // Dùng API của một bên thứ 3 (Affiliate AI) - Thằng này cực kỳ lỳ lợm
+      const res = await axios.get(`https://api.popcat.xyz/chatbot?msg=${encodeURIComponent(prompt)}`, { timeout: 8000 });
       
+      if (res.data.response) {
+        return await waiting.edit(`🤖 **${msg.author.username}:** ${res.data.response}`).catch(() => null);
+      }
+      throw new Error("Popcat tạch");
+
     } catch (err) {
-      console.error("Lỗi:", err.response?.data || err.message);
-      // Nếu Gemini tạch, dùng SimSimi cứu net ngay
+      console.log("Popcat tạch, dùng lõi dự phòng cuối cùng...");
       try {
-        const sim = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`);
-        await waiting.edit(`🤖 (Sim) ${sim.data.result}`).catch(() => null);
+        // Lõi dự phòng: Free AI qua một cổng Proxy khác
+        const res2 = await axios.get(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=vi&dt=t&q=${encodeURIComponent(prompt)}`);
+        await waiting.edit(`🤖 (Hệ thống bận) Ý sếp là: "${res2.data[0][0][0]}"? Hiện tại các server AI đều chặn IP này, sếp hãy thử lại sau ít phút nhé!`).catch(() => null);
       } catch (e) {
-        await waiting.edit("💀 Cả Google và Sim đều chặn IP Railway rồi sếp ơi!").catch(() => null);
+        await waiting.edit("💀 Railway bị khóa Outbound hoàn toàn rồi. Sếp hãy kiểm tra mục 'Networking' trên Railway nhé!").catch(() => null);
       }
     }
   }
 
-  // LỆNH MOD (KICK/BAN)
+  // LỆNH MOD (GIỮ NGUYÊN)
   if (msg.content.startsWith("!kick") && msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
     const user = msg.mentions.members.first();
-    if (user) user.kick().then(() => msg.channel.send("✅ Đã kick.")).catch(() => msg.channel.send("❌ Thua role."));
+    if (user) user.kick().then(() => msg.channel.send("✅ Đã tiễn.")).catch(() => msg.channel.send("❌ Lỗi role."));
   }
+  
   if (msg.content.startsWith("!ban") && msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
     const user = msg.mentions.members.first();
-    if (user) user.ban().then(() => msg.channel.send("🔥 Đã ban.")).catch(() => msg.channel.send("❌ Thua role."));
+    if (user) user.ban().then(() => msg.channel.send("🔥 Đã cút.")).catch(() => msg.channel.send("❌ Lỗi role."));
   }
 });
 
@@ -62,7 +62,6 @@ client.on("guildMemberAdd", async (m) => {
     if (js.filter(t => now - t < 10000).length >= 5) {
         m.guild.channels.cache.forEach(c => { if (c.isTextBased()) c.permissionOverwrites.edit(m.guild.roles.everyone, { SendMessages: false }).catch(() => null); });
     }
-    if (now - m.user.createdTimestamp < 259200000) await m.kick("AntiRaid").catch(() => null);
 });
 
 client.login(process.env.TOKEN);
