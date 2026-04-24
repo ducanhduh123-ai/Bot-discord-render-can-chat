@@ -2,21 +2,19 @@ require("dotenv").config();
 const { Client, GatewayIntentBits, PermissionsBitField, Events } = require("discord.js");
 const express = require("express");
 const mongoose = require("mongoose");
-const fetch = require("node-fetch");
+const axios = require("axios"); // Chuyển sang axios
 
 // ===== DATABASE CONNECTION =====
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Mongo connected"))
   .catch(err => console.log("❌ Mongo error:", err));
 
-// Schema
 const Guild = mongoose.model("Guild", {
   guildId: String,
   aiEnabled: { type: Boolean, default: true },
   antiRaid: { type: Boolean, default: true }
 });
 
-// ===== BOT CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -24,38 +22,6 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers
   ]
-});
-
-// ===== ANTI RAID SYSTEM =====
-const joinMap = new Map();
-
-client.on(Events.GuildMemberAdd, async (member) => {
-  try {
-    const guildData = await Guild.findOne({ guildId: member.guild.id });
-    if (!guildData?.antiRaid) return;
-
-    const now = Date.now();
-    const joins = joinMap.get(member.guild.id) || [];
-    joins.push(now);
-    joinMap.set(member.guild.id, joins);
-
-    const recent = joins.filter(t => now - t < 10000);
-
-    if (recent.length >= 5) {
-      member.guild.channels.cache.forEach(channel => {
-        if (channel.isTextBased() && channel.permissionsFor(member.guild.roles.everyone)?.has(PermissionsBitField.Flags.SendMessages)) {
-          channel.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
-        }
-      });
-    }
-
-    const accAge = now - member.user.createdTimestamp;
-    if (accAge < 1000 * 60 * 60 * 24 * 3) {
-      await member.kick("Anti-raid: Account quá mới").catch(() => null);
-    }
-  } catch (err) {
-    console.error("Anti-raid error:", err);
-  }
 });
 
 // ===== READY EVENT =====
@@ -70,35 +36,30 @@ client.on(Events.MessageCreate, async (msg) => {
   let guildData = await Guild.findOne({ guildId: msg.guild.id });
   if (!guildData) guildData = await Guild.create({ guildId: msg.guild.id });
 
-  // --- Lệnh AI (Gemma-2-9b Model) ---
+  // --- Lệnh AI (Qwen 2.5 Model - Rất mạnh) ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
     const prompt = msg.content.slice(3).trim();
     if (!prompt) return msg.reply("❓ Bạn muốn hỏi gì?");
 
     try {
-      const res = await fetch(
-        "https://api-inference.huggingface.co/models/google/gemma-2-9b-it",
+      const response = await axios.post(
+        "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-72B-Instruct",
+        { inputs: prompt },
         {
-          method: "POST",
           headers: { 
-            "Content-Type": "application/json",
             "Authorization": `Bearer ${process.env.HF_TOKEN}`,
-            "User-Agent": "DiscordBot (https://github.com/ducanhduh123-ai, 1.0.0)"
+            "Content-Type": "application/json"
           },
-          body: JSON.stringify({ 
-            inputs: prompt,
-            parameters: { max_new_tokens: 500, return_full_text: false }
-          })
+          timeout: 30000 // Chờ tối đa 30 giây
         }
       );
 
-      const data = await res.json();
+      const data = response.data;
       
+      // Xử lý lỗi đang tải model
       if (data.error && data.estimated_time) {
-        return msg.reply(`⏳ AI đang khởi động, đợi tí (khoảng ${Math.round(data.estimated_time)}s) rồi hỏi lại nhé!`);
+        return msg.reply(`⏳ AI đang khởi động, hãy đợi khoảng ${Math.round(data.estimated_time)} giây nữa rồi gõ lại nhé!`);
       }
-
-      if (data.error) return msg.reply(`❌ Lỗi hệ thống: ${data.error}`);
 
       let reply = "";
       if (Array.isArray(data)) {
@@ -107,28 +68,27 @@ client.on(Events.MessageCreate, async (msg) => {
         reply = data.generated_text;
       }
 
-      msg.reply(reply || "🤖 AI không đưa ra phản hồi nào.");
+      // Xóa phần bị lặp lại nếu model trả về cả prompt
+      const cleanReply = reply ? reply.replace(prompt, "").trim() : "🤖 AI không có câu trả lời.";
+      msg.reply(cleanReply || "🤖 AI phản hồi trống.");
+
     } catch (error) {
-      console.error("AI Error:", error);
-      msg.reply("❌ Lỗi kết nối server AI.");
+      if (error.response) {
+        // Lỗi từ phía Hugging Face (Token sai, Model bận...)
+        console.error("HF Error:", error.response.data);
+        if (error.response.status === 503) {
+            return msg.reply("⏳ Server AI đang quá tải hoặc đang tải model, thử lại sau 1 phút nhé.");
+        }
+        msg.reply(`❌ Lỗi từ server AI: ${error.response.data.error || "Không xác định"}`);
+      } else {
+        // Lỗi mạng hoặc timeout
+        console.error("Connection Error:", error.message);
+        msg.reply("❌ Không thể kết nối với server AI (Timeout).");
+      }
     }
   }
 
   // --- Lệnh Mod ---
-  if (msg.content.startsWith("!kick")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Thiếu quyền.");
-    const user = msg.mentions.members.first();
-    if (!user) return msg.reply("Tag người cần kick.");
-    user.kick().then(() => msg.reply("✅ Đã kick.")).catch(() => msg.reply("❌ Lỗi."));
-  }
-
-  if (msg.content.startsWith("!ban")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Thiếu quyền.");
-    const user = msg.mentions.members.first();
-    if (!user) return msg.reply("Tag người cần ban.");
-    user.ban().then(() => msg.reply("🔥 Đã ban.")).catch(() => msg.reply("❌ Lỗi."));
-  }
-
   if (msg.content === "!unlock") {
     if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) return msg.reply("❌ Cần quyền Admin.");
     msg.guild.channels.cache.forEach(channel => {
@@ -140,10 +100,9 @@ client.on(Events.MessageCreate, async (msg) => {
   }
 });
 
-// ===== START BOT =====
 client.login(process.env.TOKEN);
 
-// ===== DASHBOARD (Railway Port fix) =====
+// ===== DASHBOARD =====
 const app = express();
 app.get("/", (req, res) => res.send("Bot is Online!"));
 const PORT = process.env.PORT || 3000;
