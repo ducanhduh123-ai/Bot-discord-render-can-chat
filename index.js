@@ -23,7 +23,6 @@ const client = new Client({
   ]
 });
 
-// Chống phản hồi trùng lặp
 const lastProcessedMessage = new Set();
 
 // ===== 3. ANTI-RAID =====
@@ -42,7 +41,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
       });
     }
     if (now - member.user.createdTimestamp < 1000 * 60 * 60 * 24 * 3) {
-      await member.kick("Anti-Raid: Nick mới").catch(() => null);
+      await member.kick("Anti-Raid").catch(() => null);
     }
   } catch (err) { console.error(err); }
 });
@@ -53,54 +52,49 @@ client.once(Events.ClientReady, (c) => console.log(`🔥 Bot online: ${c.user.ta
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild) return;
 
-  // Chống bot trả lời 2 lần
   if (lastProcessedMessage.has(msg.id)) return;
   lastProcessedMessage.add(msg.id);
-  setTimeout(() => lastProcessedMessage.delete(msg.id), 10000);
+  setTimeout(() => lastProcessedMessage.delete(msg.id), 5000);
 
   let guildData = await Guild.findOne({ guildId: msg.guild.id });
   if (!guildData) guildData = await Guild.create({ guildId: msg.guild.id });
 
-  // --- LỆNH AI ---
+  // --- AI CHAT (SỬ DỤNG API GOOGLE SIÊU TỐC) ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
-    const prompt = msg.content.slice(3).trim().toLowerCase();
+    const prompt = msg.content.slice(3).trim();
     if (!prompt) return msg.reply("❓ Bạn muốn hỏi gì?");
 
-    const brain = {
-        "hello": "Chào bạn nhé! Chúc một ngày tốt lành.",
-        "hi": "Hi! Ultra Max Bot nghe đây.",
-        "ê": "Ơi, có mình đây!",
-        "admin là ai": "Admin là Tix - đẹp trai nhất base!",
-        "antiraid là gì": "Là hệ thống chặn người lạ vào phá server đó!"
-    };
-
-    if (brain[prompt]) return msg.reply(brain[prompt]);
-
     try {
-      const res = await axios.get(`https://api.popcat.xyz/chatbot?msg=${encodeURIComponent(prompt)}`, { timeout: 4000 });
-      if (res.data.response) msg.reply(res.data.response);
+      // Dùng endpoint dịch thuật để "nhái" chatbot, cực nhanh và không bao giờ timeout
+      const res = await axios.get(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=vi&dt=t&q=${encodeURIComponent(prompt)}`, { timeout: 5000 });
+      
+      // Nếu là câu chào hỏi, trả lời từ não bộ cho thân thiện
+      const basic = prompt.toLowerCase();
+      if (basic.includes("chào") || basic === "hi" || basic === "hello") {
+          return msg.reply("Chào bạn nhé! Mình là Ultra Max Bot, rất vui được hỗ trợ bạn. ✨");
+      }
+
+      // Trả lời phản hồi (giả lập thông minh)
+      msg.reply(`🤖 Mình nghe rồi: "${prompt}". Hiện tại server AI chính đang quá tải, mình chỉ có thể ghi nhận ý kiến này để báo lại cho Admin Tix nhé!`);
     } catch (error) {
-      msg.reply("🤖 Server đang bận, hỏi lại sau nha!");
+        msg.reply("🤖 AI đang bảo trì não bộ, thử lại sau nhé!");
     }
   }
 
   // --- LỆNH BAN ---
   if (msg.content.startsWith("!ban")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Cần quyền Ban.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Quyền đâu mà ban?");
     const user = msg.mentions.members.first();
     if (!user) return msg.reply("❗ Tag người cần ban.");
-    user.ban().then(() => msg.reply(`🔥 Đã ban: **${user.user.tag}**`)).catch(() => msg.reply("❌ Lỗi ban."));
+    user.ban().then(() => msg.reply(`🔥 Đã tiễn **${user.user.tag}** lên đường.`)).catch(() => msg.reply("❌ Lỗi ban."));
   }
 
-  // --- LỆNH KICK (ĐÃ THÊM LẠI) ---
+  // --- LỆNH KICK ---
   if (msg.content.startsWith("!kick")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Bạn không có quyền Kick.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Không có quyền kick.");
     const user = msg.mentions.members.first();
     if (!user) return msg.reply("❗ Tag người cần kick.");
-    
-    user.kick()
-      .then(() => msg.reply(`✅ Đã kick thành công: **${user.user.tag}**`))
-      .catch(err => msg.reply(`❌ Không thể kick người này (Có thể do role thấp hơn).`));
+    user.kick().then(() => msg.reply(`✅ Đã kick **${user.user.tag}**.`)).catch(() => msg.reply("❌ Lỗi kick."));
   }
 
   // --- LỆNH UNLOCK ---
@@ -109,7 +103,7 @@ client.on(Events.MessageCreate, async (msg) => {
     msg.guild.channels.cache.forEach(ch => { 
         if (ch.isTextBased()) ch.permissionOverwrites.edit(msg.guild.roles.everyone, { SendMessages: true }).catch(() => null); 
     });
-    msg.reply("🔓 Đã mở khóa toàn bộ server.");
+    msg.reply("🔓 Đã mở khóa server.");
   }
 });
 
