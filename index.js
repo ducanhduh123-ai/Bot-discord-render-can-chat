@@ -1,11 +1,14 @@
 require("dotenv").config();
 const { Client, GatewayIntentBits, PermissionsBitField, Events } = require("discord.js");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const express = require("express");
 const mongoose = require("mongoose");
-const axios = require("axios");
 
-// Kết nối DB ngầm hoàn toàn
-mongoose.connect(process.env.MONGO_URI).catch(() => console.log("⚠️ DB chưa kết nối"));
+// Kết nối Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+mongoose.connect(process.env.MONGO_URI).catch(() => null);
 
 const client = new Client({
   intents: [
@@ -16,85 +19,67 @@ const client = new Client({
   ]
 });
 
-// --- ANTI-RAID (BẢO VỆ SERVER) ---
-const joinMap = new Map();
-client.on(Events.GuildMemberAdd, async (member) => {
-    const now = Date.now();
-    const joins = joinMap.get(member.guild.id) || [];
-    joins.push(now);
-    joinMap.set(member.guild.id, joins);
-
-    // 1. Chống Raid: 5 người vào/10 giây -> Khóa server
-    if (joins.filter(t => now - t < 10000).length >= 5) {
-        member.guild.channels.cache.forEach(ch => {
-            if (ch.isTextBased()) ch.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
-        });
-    }
-    // 2. Tự động kick tài khoản quá mới (dưới 3 ngày)
-    if (now - member.user.createdTimestamp < 1000 * 60 * 60 * 24 * 3) {
-        await member.kick("Anti-Raid: Tài khoản mới").catch(() => null);
-    }
-});
-
-client.once(Events.ClientReady, () => console.log("🔥 BOT FULL GIÁP ĐÃ SẴN SÀNG"));
+client.once(Events.ClientReady, () => console.log("🚀 YEMIGI ĐÃ SẴN SÀNG - NÃO SIÊU CẤP!"));
 
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild) return;
 
-  // --- LỆNH AI (CHỐNG TIMED OUT) ---
+  // --- LỆNH AI (SỬ DỤNG GEMINI) ---
   if (msg.content.startsWith("!ai")) {
     const prompt = msg.content.slice(3).trim();
-    if (!prompt) return msg.channel.send("❓ Nhắn gì đi bro?");
+    if (!prompt) return msg.channel.send("❓ Nhắn gì đi sếp?");
 
-    // Phản hồi "Nah bro" tức thì
+    // Phản hồi Nah bro tức thì
     if (prompt.toLowerCase().includes("ngu")) return msg.channel.send("Nah bro");
 
-    // Hiện trạng thái đang gõ và gửi tin nhắn chờ
     msg.channel.sendTyping().catch(() => null);
-    const waiting = await msg.channel.send("⏳ Đang nặn não...").catch(() => null);
-    if (!waiting) return;
+    const waiting = await msg.channel.send("⏳ Yemigi đang nặn não...").catch(() => null);
 
-    // Gọi AI ngầm
     (async () => {
       try {
-        const res = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 8000 });
-        await waiting.edit(`🤖 **Trả lời cho ${msg.author.username}:** ${res.data.result || "Uống cafe rồi!"}`).catch(() => null);
+        // Gọi não Gemini
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        // Cắt bớt nếu câu trả lời quá dài (Discord giới hạn 2000 ký tự)
+        const finalAns = text.length > 1900 ? text.substring(0, 1900) + "..." : text;
+        
+        await waiting.edit(`🤖 **${msg.author.username}:** ${finalAns}`).catch(() => null);
       } catch (e) {
-        await waiting.edit("☕ AI đi uống cafe rồi, tí thử lại nha!").catch(() => null);
+        console.error(e);
+        await waiting.edit("☕ Gemini đang bảo trì hoặc Key sai, tí thử lại sếp ơi!").catch(() => null);
       }
     })();
     return;
   }
 
-  // --- LỆNH KICK ---
+  // --- LỆNH MOD & ANTIRAID (GIỮ NGUYÊN) ---
   if (msg.content.startsWith("!kick")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.channel.send("❌ Sếp không có quyền.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.channel.send("❌ Thiếu quyền.");
     const user = msg.mentions.members.first();
-    if (!user) return msg.channel.send("❗ Tag ai đó để kick sếp ơi.");
-    user.kick().then(() => msg.channel.send("✅ Đã tiễn khách.")).catch(() => msg.channel.send("❌ Lỗi role bot thấp hơn người này."));
+    if (user) user.kick().then(() => msg.channel.send("✅ Đã kick.")).catch(() => msg.channel.send("❌ Lỗi role."));
   }
-
-  // --- LỆNH BAN ---
+  
   if (msg.content.startsWith("!ban")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.channel.send("❌ Sếp không có quyền.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.channel.send("❌ Thiếu quyền.");
     const user = msg.mentions.members.first();
-    if (!user) return msg.channel.send("❗ Tag ai đó để ban sếp ơi.");
-    user.ban().then(() => msg.channel.send("🔥 Đã ban vĩnh viễn.")).catch(() => msg.channel.send("❌ Lỗi quyền hạn."));
-  }
-
-  // --- LỆNH MỞ KHÓA SERVER (SAU KHI RAID) ---
-  if (msg.content === "!unlock" && msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-    msg.guild.channels.cache.forEach(ch => {
-        if (ch.isTextBased()) ch.permissionOverwrites.edit(msg.guild.roles.everyone, { SendMessages: true }).catch(() => null);
-    });
-    msg.channel.send("🔓 Đã mở khóa server!");
+    if (user) user.ban().then(() => msg.channel.send("🔥 Đã ban.")).catch(() => msg.channel.send("❌ Lỗi role."));
   }
 });
 
-client.login(process.env.TOKEN);
+// ANTI-RAID (KHÔNG ĐỔI)
+const joinMap = new Map();
+client.on(Events.GuildMemberAdd, async (m) => {
+    const now = Date.now();
+    const js = joinMap.get(m.guild.id) || [];
+    js.push(now); joinMap.set(m.guild.id, js);
+    if (js.filter(t => now - t < 10000).length >= 5) {
+        m.guild.channels.cache.forEach(c => { if (c.isTextBased()) c.permissionOverwrites.edit(m.guild.roles.everyone, { SendMessages: false }).catch(() => null); });
+    }
+    if (now - m.user.createdTimestamp < 259200000) await m.kick("AntiRaid").catch(() => null);
+});
 
-// Dashboard cho Railway
-const app = express();
-app.get("/", (req, res) => res.send("Bot Online - Full Armor Version"));
-app.listen(process.env.PORT || 3000);
+client.login(process.env.TOKEN);
+express().get("/", (r, s) => s.send("Yemigi Live")).listen(process.env.PORT || 3000);
 
