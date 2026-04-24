@@ -4,7 +4,6 @@ const express = require("express");
 const mongoose = require("mongoose");
 const axios = require("axios");
 
-// ===== 1. DATABASE =====
 mongoose.connect(process.env.MONGO_URI).then(() => console.log("✅ Database Connected"));
 
 const Guild = mongoose.model("Guild", {
@@ -13,19 +12,13 @@ const Guild = mongoose.model("Guild", {
   antiRaid: { type: Boolean, default: true }
 });
 
-// ===== 2. BOT CLIENT =====
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
 });
 
 const lastProcessedMessage = new Set();
 
-// ===== 3. ANTI-RAID =====
+// ===== ANTI-RAID =====
 const joinMap = new Map();
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
@@ -40,88 +33,64 @@ client.on(Events.GuildMemberAdd, async (member) => {
         if (ch.isTextBased()) ch.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
       });
     }
-    if (now - member.user.createdTimestamp < 1000 * 60 * 60 * 24 * 3) {
-      await member.kick("Anti-Raid: Nick mới").catch(() => null);
-    }
+    if (now - member.user.createdTimestamp < 1000 * 60 * 60 * 24 * 3) await member.kick("Anti-Raid").catch(() => null);
   } catch (err) { console.error(err); }
 });
 
 client.once(Events.ClientReady, (c) => console.log(`🔥 Bot online: ${c.user.tag}`));
 
-// ===== 4. XỬ LÝ LỆNH =====
+// ===== XỬ LÝ LỆNH =====
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild) return;
-
   if (lastProcessedMessage.has(msg.id)) return;
   lastProcessedMessage.add(msg.id);
   setTimeout(() => lastProcessedMessage.delete(msg.id), 5000);
 
-  let guildData = await Guild.findOne({ guildId: msg.guild.id });
-  if (!guildData) guildData = await Guild.create({ guildId: msg.guild.id });
+  let guildData = await Guild.findOne({ guildId: msg.guild.id }) || await Guild.create({ guildId: msg.guild.id });
 
-  // --- HỆ THỐNG AI SIÊU CẤP (KHÔNG LO QUÁ TẢI) ---
+  // --- AI CHAT SIÊU TỐC ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
-    const prompt = msg.content.slice(3).trim().toLowerCase();
+    const prompt = msg.content.slice(3).trim();
     if (!prompt) return msg.reply("❓ Bạn muốn hỏi gì?");
 
-    // Lớp 1: Não bộ offline (Phản hồi ngay lập tức)
-    const localBrain = {
-        "hi": "Chào bạn! Ultra Max Bot đang trực chiến. 🛡️",
-        "hello": "Xin chào! Chúc bạn một ngày tốt lành.",
-        "ê": "Ơi, mình nghe đây!",
-        "kick": "Dùng `!kick @user` nhé.",
-        "ban": "Dùng `!ban @user` để tiễn khách.",
-        "admin": "Admin là Tix - sếp tổng của mình!"
-    };
-
-    if (localBrain[prompt]) return msg.reply(localBrain[prompt]);
-
     try {
-      // Lớp 2: API Siêu tốc (Sử dụng endpoint ổn định hơn)
-      const res = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 3000 });
-      if (res.data.result) return msg.reply(res.data.result);
-      throw new Error("API Busy");
+      // Dùng model Gemma của Google trên Hugging Face (Cần HF_TOKEN trong Railway)
+      const res = await axios.post(
+        "https://api-inference.huggingface.co/models/google/gemma-1.1-2b-it",
+        { inputs: prompt },
+        { headers: { Authorization: `Bearer ${process.env.HF_TOKEN}` }, timeout: 8000 }
+      );
+      
+      let reply = Array.isArray(res.data) ? res.data[0].generated_text : res.data.generated_text;
+      msg.reply(reply.replace(prompt, "").trim() || "🤖 Mình nghe rồi nhưng chưa biết trả lời sao.");
     } catch (error) {
-      // Lớp 3: Nếu quá tải, bot sẽ trả lời thông minh thay vì báo lỗi
-      const funReplies = [
-          "🤖 Mình đang bận quét dọn server, tí mình trả lời nha!",
-          "🤖 Sếp Tix đang bảo trì não cho mình, thử lại sau ít phút nhé.",
-          "🤖 AI đang đi uống cafe rồi, bạn chờ tí được không?"
-      ];
-      msg.reply(funReplies[Math.floor(Math.random() * funReplies.length)]);
+      // Nếu API xịn lỗi, dùng SimSimi dự phòng ngay
+      try {
+        const sim = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 3000 });
+        msg.reply(sim.data.result || "🤖 Đang quá tải, tí hỏi lại nha!");
+      } catch (e) {
+        msg.reply("🤖 AI đang đi uống cafe rồi, bạn chờ tí được không?");
+      }
     }
   }
 
-  // --- LỆNH BAN ---
+  // --- LỆNH MOD ---
   if (msg.content.startsWith("!ban")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Không đủ quyền.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Cần quyền Ban.");
     const user = msg.mentions.members.first();
-    if (!user) return msg.reply("❗ Tag người cần ban.");
-    user.ban().then(() => msg.reply(`🔥 Đã ban: **${user.user.tag}**`)).catch(() => msg.reply("❌ Lỗi role bot thấp hơn."));
+    if (user) user.ban().then(() => msg.reply(`🔥 Đã ban **${user.user.tag}**.`)).catch(() => msg.reply("❌ Lỗi role."));
   }
 
-  // --- LỆNH KICK ---
   if (msg.content.startsWith("!kick")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Không đủ quyền.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Cần quyền Kick.");
     const user = msg.mentions.members.first();
-    if (!user) return msg.reply("❗ Tag người cần kick.");
-    user.kick().then(() => msg.reply(`✅ Đã kick: **${user.user.tag}**`)).catch(() => msg.reply("❌ Lỗi."));
-  }
-
-  // --- LỆNH UNLOCK ---
-  if (msg.content === "!unlock") {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) return msg.reply("❌ Cần quyền Admin.");
-    msg.guild.channels.cache.forEach(ch => { 
-        if (ch.isTextBased()) ch.permissionOverwrites.edit(msg.guild.roles.everyone, { SendMessages: true }).catch(() => null); 
-    });
-    msg.reply("🔓 Đã mở khóa server.");
+    if (user) user.kick().then(() => msg.reply(`✅ Đã kick **${user.user.tag}**.`)).catch(() => msg.reply("❌ Lỗi."));
   }
 });
 
 client.login(process.env.TOKEN);
 
-// ===== 5. DASHBOARD =====
 const app = express();
-app.get("/", (req, res) => res.send("Bot is Alive!"));
+app.get("/", (req, res) => res.send("Bot Online"));
 app.listen(process.env.PORT || 3000);
 
