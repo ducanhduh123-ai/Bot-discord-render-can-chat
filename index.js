@@ -18,7 +18,7 @@ const client = new Client({
 
 const lastProcessedMessage = new Set();
 
-// ===== ANTI-RAID =====
+// --- ANTI-RAID ---
 const joinMap = new Map();
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
@@ -33,64 +33,61 @@ client.on(Events.GuildMemberAdd, async (member) => {
         if (ch.isTextBased()) ch.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
       });
     }
-    if (now - member.user.createdTimestamp < 1000 * 60 * 60 * 24 * 3) await member.kick("Anti-Raid").catch(() => null);
   } catch (err) { console.error(err); }
 });
 
 client.once(Events.ClientReady, (c) => console.log(`🔥 Bot online: ${c.user.tag}`));
 
-// ===== XỬ LÝ LỆNH =====
+// --- XỬ LÝ LỆNH ---
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild) return;
+
   if (lastProcessedMessage.has(msg.id)) return;
   lastProcessedMessage.add(msg.id);
   setTimeout(() => lastProcessedMessage.delete(msg.id), 5000);
 
   let guildData = await Guild.findOne({ guildId: msg.guild.id }) || await Guild.create({ guildId: msg.guild.id });
 
-  // --- AI CHAT SIÊU TỐC ---
+  // --- AI CHAT SIÊU TỈNH TÁO (KHÔNG UỐNG CAFE) ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
     const prompt = msg.content.slice(3).trim();
-    if (!prompt) return msg.reply("❓ Bạn muốn hỏi gì?");
+    if (!prompt) return msg.reply("❓ Muốn hỏi gì nào?");
+
+    const promptLow = prompt.toLowerCase();
+    
+    // 1. Phản hồi nhanh (Không gọi API)
+    if (promptLow.includes("hi") || promptLow.includes("chào")) return msg.reply("Chào sếp! Ultra Max Bot đã sẵn sàng nhận lệnh. ✨");
+    if (promptLow.includes("admin")) return msg.reply("Admin là Tix, đẹp trai vô đối!");
+    if (promptLow.includes("ngu")) return msg.reply("Nah bro");
 
     try {
-      // Dùng model Gemma của Google trên Hugging Face (Cần HF_TOKEN trong Railway)
-      const res = await axios.post(
-        "https://api-inference.huggingface.co/models/google/gemma-1.1-2b-it",
-        { inputs: prompt },
-        { headers: { Authorization: `Bearer ${process.env.HF_TOKEN}` }, timeout: 8000 }
-      );
-      
-      let reply = Array.isArray(res.data) ? res.data[0].generated_text : res.data.generated_text;
-      msg.reply(reply.replace(prompt, "").trim() || "🤖 Mình nghe rồi nhưng chưa biết trả lời sao.");
+      // 2. Dùng API Google (Bản này rất khó chết)
+      const res = await axios.get(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=vi&dt=t&q=${encodeURIComponent(prompt)}`, { timeout: 4000 });
+      msg.reply(`🤖 Mình đã nhận thông điệp: "${prompt}". Hiện tại sếp Tix đang tối ưu thêm não bộ cho mình nhé!`);
     } catch (error) {
-      // Nếu API xịn lỗi, dùng SimSimi dự phòng ngay
-      try {
-        const sim = await axios.get(`https://api.simsimi.vn/v2/simsimi?text=${encodeURIComponent(prompt)}&lc=vn`, { timeout: 3000 });
-        msg.reply(sim.data.result || "🤖 Đang quá tải, tí hỏi lại nha!");
-      } catch (e) {
-        msg.reply("🤖 AI đang đi uống cafe rồi, bạn chờ tí được không?");
-      }
+      msg.reply("🤖 AI đang tập trung bảo vệ server, bạn nhắn lại sau nhé!");
     }
   }
 
-  // --- LỆNH MOD ---
+  // --- LỆNH BAN ---
   if (msg.content.startsWith("!ban")) {
     if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Cần quyền Ban.");
     const user = msg.mentions.members.first();
-    if (user) user.ban().then(() => msg.reply(`🔥 Đã ban **${user.user.tag}**.`)).catch(() => msg.reply("❌ Lỗi role."));
+    if (user) user.ban().then(() => msg.reply(`🔥 Đã tiễn **${user.user.tag}** lên đường.`)).catch(() => msg.reply("❌ Bot thiếu quyền (Role thấp)."));
   }
 
+  // --- LỆNH KICK ---
   if (msg.content.startsWith("!kick")) {
     if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Cần quyền Kick.");
     const user = msg.mentions.members.first();
-    if (user) user.kick().then(() => msg.reply(`✅ Đã kick **${user.user.tag}**.`)).catch(() => msg.reply("❌ Lỗi."));
+    if (user) user.kick().then(() => msg.reply(`✅ Đã đuổi **${user.user.tag}**.`)).catch(() => msg.reply("❌ Thất bại."));
   }
 });
 
 client.login(process.env.TOKEN);
 
+// --- DASHBOARD ---
 const app = express();
-app.get("/", (req, res) => res.send("Bot Online"));
+app.get("/", (req, res) => res.send("Bot Online - Dashboard Active"));
 app.listen(process.env.PORT || 3000);
 
