@@ -36,26 +36,22 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
     const now = Date.now();
     const joins = joinMap.get(member.guild.id) || [];
-
     joins.push(now);
     joinMap.set(member.guild.id, joins);
 
     const recent = joins.filter(t => now - t < 10000);
 
     if (recent.length >= 5) {
-      console.log(`🚨 RAID DETECTED in ${member.guild.name}`);
       member.guild.channels.cache.forEach(channel => {
         if (channel.isTextBased() && channel.permissionsFor(member.guild.roles.everyone)?.has(PermissionsBitField.Flags.SendMessages)) {
-          channel.permissionOverwrites.edit(member.guild.roles.everyone, {
-            SendMessages: false
-          }).catch(() => null);
+          channel.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => null);
         }
       });
     }
 
     const accAge = now - member.user.createdTimestamp;
     if (accAge < 1000 * 60 * 60 * 24 * 3) {
-      await member.kick("Anti-raid: Account quá mới (dưới 3 ngày)").catch(() => null);
+      await member.kick("Anti-raid: Account quá mới").catch(() => null);
     }
   } catch (err) {
     console.error("Anti-raid error:", err);
@@ -72,81 +68,65 @@ client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot || !msg.guild) return;
 
   let guildData = await Guild.findOne({ guildId: msg.guild.id });
-  if (!guildData) {
-    guildData = await Guild.create({ guildId: msg.guild.id });
-  }
+  if (!guildData) guildData = await Guild.create({ guildId: msg.guild.id });
 
-  // --- Lệnh AI (Mistral-7B Model) ---
+  // --- Lệnh AI (Gemma-2-9b Model) ---
   if (msg.content.startsWith("!ai") && guildData.aiEnabled) {
     const prompt = msg.content.slice(3).trim();
     if (!prompt) return msg.reply("❓ Bạn muốn hỏi gì?");
 
     try {
       const res = await fetch(
-        "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-v0.3",
+        "https://api-inference.huggingface.co/models/google/gemma-2-9b-it",
         {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.HF_TOKEN}` 
+            "Authorization": `Bearer ${process.env.HF_TOKEN}`,
+            "User-Agent": "DiscordBot (https://github.com/ducanhduh123-ai, 1.0.0)"
           },
           body: JSON.stringify({ 
-            inputs: `Context: You are a helpful assistant. Question: ${prompt}`,
-            parameters: { max_new_tokens: 250, return_full_text: false }
+            inputs: prompt,
+            parameters: { max_new_tokens: 500, return_full_text: false }
           })
         }
       );
 
       const data = await res.json();
       
-      // Xử lý khi AI đang bận khởi động (Cold Start)
       if (data.error && data.estimated_time) {
-        return msg.reply(`⏳ AI đang khởi động (đang tải model), thử lại sau khoảng ${Math.round(data.estimated_time)} giây nhé!`);
+        return msg.reply(`⏳ AI đang khởi động, đợi tí (khoảng ${Math.round(data.estimated_time)}s) rồi hỏi lại nhé!`);
       }
 
-      let reply = "🤖 AI hiện tại không phản hồi, hãy thử lại sau.";
-      
-      if (Array.isArray(data) && data[0]?.generated_text) {
-        reply = data[0].generated_text;
-      } else if (data.generated_text) {
+      if (data.error) return msg.reply(`❌ Lỗi hệ thống: ${data.error}`);
+
+      let reply = "";
+      if (Array.isArray(data)) {
+        reply = data[0]?.generated_text;
+      } else {
         reply = data.generated_text;
-      } else if (data.error) {
-        reply = `❌ AI Error: ${data.error}`;
       }
 
-      msg.reply(reply.trim());
+      msg.reply(reply || "🤖 AI không đưa ra phản hồi nào.");
     } catch (error) {
-      console.error("AI Fetch Error:", error);
-      msg.reply("❌ Không thể kết nối với trí tuệ nhân tạo.");
+      console.error("AI Error:", error);
+      msg.reply("❌ Lỗi kết nối server AI.");
     }
   }
 
   // --- Lệnh Mod ---
   if (msg.content.startsWith("!kick")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Bạn không có quyền.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return msg.reply("❌ Thiếu quyền.");
     const user = msg.mentions.members.first();
     if (!user) return msg.reply("Tag người cần kick.");
-    user.kick().then(() => msg.reply("✅ Đã kick.")).catch(() => msg.reply("❌ Lỗi khi kick."));
+    user.kick().then(() => msg.reply("✅ Đã kick.")).catch(() => msg.reply("❌ Lỗi."));
   }
 
   if (msg.content.startsWith("!ban")) {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Bạn không có quyền.");
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return msg.reply("❌ Thiếu quyền.");
     const user = msg.mentions.members.first();
     if (!user) return msg.reply("Tag người cần ban.");
-    user.ban().then(() => msg.reply("🔥 Đã ban.")).catch(() => msg.reply("❌ Lỗi khi ban."));
-  }
-
-  // --- Control Anti-Raid ---
-  if (msg.content === "!antiraid on") {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) return msg.reply("❌ Cần quyền Admin.");
-    await Guild.findOneAndUpdate({ guildId: msg.guild.id }, { antiRaid: true }, { upsert: true });
-    msg.reply("🛡️ Anti-raid đã BẬT.");
-  }
-
-  if (msg.content === "!antiraid off") {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) return msg.reply("❌ Cần quyền Admin.");
-    await Guild.findOneAndUpdate({ guildId: msg.guild.id }, { antiRaid: false }, { upsert: true });
-    msg.reply("⚠️ Anti-raid đã TẮT.");
+    user.ban().then(() => msg.reply("🔥 Đã ban.")).catch(() => msg.reply("❌ Lỗi."));
   }
 
   if (msg.content === "!unlock") {
@@ -156,16 +136,16 @@ client.on(Events.MessageCreate, async (msg) => {
         channel.permissionOverwrites.edit(msg.guild.roles.everyone, { SendMessages: true }).catch(() => null);
       }
     });
-    msg.reply("🔓 Đã mở khóa tất cả kênh chat.");
+    msg.reply("🔓 Đã mở khóa server.");
   }
 });
 
 // ===== START BOT =====
 client.login(process.env.TOKEN);
 
-// ===== DASHBOARD (Dành cho Railway/Render) =====
+// ===== DASHBOARD (Railway Port fix) =====
 const app = express();
 app.get("/", (req, res) => res.send("Bot is Online!"));
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🌐 Port: ${PORT}`));
 
